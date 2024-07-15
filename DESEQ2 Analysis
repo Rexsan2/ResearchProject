@@ -1,0 +1,82 @@
+# Load necessary libraries
+library(DESeq2)
+library(tidyverse)
+library(pheatmap)
+
+# Define the paths
+series_matrix_path <- "C:/Users/ketan/Desktop/Research Project/eQTL data/GSE121344_series_matrix.txt"
+raw_counts_path <- "C:/Users/ketan/Desktop/Research Project/eQTL data/GSE121344_raw_counts_GRCh38.p13_NCBI.tsv"
+
+# Read the series matrix file
+series_matrix <- readLines(series_matrix_path)
+
+# Extract sample metadata
+sample_geo_accessions <- series_matrix[grep("!Sample_geo_accession", series_matrix)]
+sample_conditions <- series_matrix[grep("!Sample_characteristics_ch1", series_matrix)]
+
+# Extract GEO accessions and conditions from the lines
+geo_accessions <- strsplit(sample_geo_accessions, "\t")[[1]][-1]
+conditions <- strsplit(sample_conditions[2], "\t")[[1]][-1]
+
+# Clean the sample IDs by removing extra quotes and spaces
+geo_accessions <- gsub("\"", "", geo_accessions)
+geo_accessions <- trimws(geo_accessions)
+
+# Combine extracted metadata into a data frame
+metadata <- data.frame(
+  sample_id = geo_accessions,
+  condition = gsub("condition: ", "", conditions)
+)
+
+# Convert condition to factor
+metadata$condition <- factor(metadata$condition)
+
+# Load the uncompressed raw count data
+raw_counts <- read.csv(raw_counts_path, sep = "\t", row.names = 1)
+
+# Find the common sample IDs
+common_sample_ids <- intersect(metadata$sample_id, colnames(raw_counts))
+
+# Subset the count data and metadata to include only matching samples
+raw_counts <- raw_counts[, common_sample_ids]
+metadata <- metadata[metadata$sample_id %in% common_sample_ids, ]
+
+# Ensure the order of sample IDs matches
+metadata <- metadata[match(common_sample_ids, metadata$sample_id), ]
+
+# Convert condition column in metadata to a factor
+metadata$condition <- factor(metadata$condition)
+
+# Create DESeq2 dataset object
+dds <- DESeqDataSetFromMatrix(countData = as.matrix(raw_counts),
+                              colData = metadata,
+                              design = ~ condition)
+
+# Run the DESeq2 analysis
+dds <- DESeq(dds)
+
+# Get the results
+res <- results(dds)
+
+# Order by adjusted p-value
+resOrdered <- res[order(res$padj), ]
+
+# Extract significant genes
+sig_genes <- subset(resOrdered, padj < 0.05)
+
+# Ensure the top genes are correctly extracted
+top_genes <- head(rownames(sig_genes), 20)
+
+# Extract assay data for top genes
+top_genes_data <- assay(vst(dds))[top_genes, ]
+
+# Ensure no missing values in the extracted data
+top_genes_data[is.na(top_genes_data)] <- 0
+
+# Ensure metadata matches the top_genes_data
+metadata <- metadata[match(colnames(top_genes_data), metadata$sample_id), ]
+rownames(metadata) <- metadata$sample_id
+metadata <- metadata[, "condition", drop = FALSE]
+
+# Generate the heatmap with annotations
+pheatmap(top_genes_data, scale = "row", annotation_col = metadata)
